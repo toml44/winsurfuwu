@@ -1,0 +1,318 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Enums
+enum Role {
+  CUSTOMER
+  SELLER
+  ADMIN
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  CONFIRMED
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  REFUNDED
+}
+
+enum DeliveryMethod {
+  DELIVERY
+  PICKUP
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELED
+}
+
+enum PlanName {
+  FREE
+  PREMIUM
+}
+
+// NextAuth.js models (v4) with Prisma Adapter
+model User {
+  id             String    @id @default(cuid())
+  name           String?
+  email          String?   @unique
+  emailVerified  DateTime?
+  image          String?
+  role           Role      @default(CUSTOMER)
+  createdAt      DateTime  @default(now())
+
+  accounts       Account[]
+  sessions       Session[]
+  sellerProfile  SellerProfile?
+  orders         Order[]   @relation("UserOrders")
+  messages       Message[] @relation("UserMessages")
+  reviews        Review[]  @relation("UserReviews")
+  favorites      Favorite[]
+  conversationsAsCustomer Conversation[] @relation("UserCustomerConversations")
+}
+
+model Account {
+  id                 String  @id @default(cuid())
+  userId             String
+  type               String
+  provider           String
+  providerAccountId  String
+  refresh_token      String?
+  access_token       String?
+  expires_at         Int?
+  token_type         String?
+  scope              String?
+  id_token           String?
+  session_state      String?
+  oauth_token_secret String?
+  oauth_token        String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// Core marketplace models
+model SellerProfile {
+  id               String    @id @default(cuid())
+  userId           String    @unique
+  businessName     String
+  slug             String    @unique
+  logoUrl          String?
+  coverUrl         String?
+  description      String?
+  categoryId       Int?
+  address          String?
+  city             String?
+  country          String?
+  lat              Float?
+  lng              Float?
+  deliveryEnabled  Boolean   @default(true)
+  pickupEnabled    Boolean   @default(true)
+  productLimit     Int       @default(10)
+  plan             PlanName  @default(FREE)
+  createdAt        DateTime  @default(now())
+
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category         Category? @relation(fields: [categoryId], references: [id])
+  products         Product[]
+  orders           Order[]   @relation("SellerOrders")
+  conversations    Conversation[]
+  reviews          Review[]
+  favorites        Favorite[]
+  statsDaily       SellerStatsDaily[]
+  subscription     Subscription?
+  payoutAccount    PayoutAccount?
+}
+
+model Category {
+  id        Int        @id @default(autoincrement())
+  name      String
+  slug      String     @unique
+  parentId  Int?
+
+  parent    Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  children  Category[] @relation("CategoryHierarchy")
+  sellers   SellerProfile[]
+  products  Product[]
+}
+
+model Product {
+  id          String         @id @default(cuid())
+  sellerId    String
+  name        String
+  slug        String
+  description String?
+  priceCents  Int
+  currency    String         @default("EUR")
+  stock       Int            @default(0)
+  isActive    Boolean        @default(true)
+  images      Json?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  categoryId  Int?
+
+  seller      SellerProfile  @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  category    Category?      @relation(fields: [categoryId], references: [id])
+  orderItems  OrderItem[]
+
+  @@unique([sellerId, slug])
+}
+
+model Order {
+  id                    String         @id @default(cuid())
+  customerId            String
+  sellerId              String
+  status                OrderStatus    @default(PENDING)
+  subtotalCents         Int
+  shippingCents         Int            @default(0)
+  feesCents             Int            @default(0)
+  totalCents            Int
+  currency              String         @default("EUR")
+  deliveryMethod        DeliveryMethod
+  shippingAddressJson   Json?
+  notes                 String?
+  stripePaymentIntentId String?
+  stripeTransferId      String?
+  createdAt             DateTime       @default(now())
+
+  customer  User           @relation("UserOrders", fields: [customerId], references: [id])
+  seller    SellerProfile  @relation("SellerOrders", fields: [sellerId], references: [id])
+  items     OrderItem[]
+}
+
+model OrderItem {
+  id               String  @id @default(cuid())
+  orderId          String
+  productId        String
+  productNameSnap  String
+  unitPriceCents   Int
+  quantity         Int
+  totalCents       Int
+  variantJson      Json?
+
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id])
+}
+
+model Conversation {
+  id            String        @id @default(cuid())
+  customerId    String
+  sellerId      String
+  lastMessageAt DateTime?
+
+  customer  User           @relation("UserCustomerConversations", fields: [customerId], references: [id], onDelete: Cascade)
+  seller    SellerProfile  @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  messages  Message[]
+
+  @@unique([customerId, sellerId])
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  senderId       String
+  body           String
+  attachments    Json?
+  createdAt      DateTime     @default(now())
+  readAt         DateTime?
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User         @relation("UserMessages", fields: [senderId], references: [id], onDelete: Cascade)
+}
+
+model Review {
+  id         String   @id @default(cuid())
+  sellerId   String
+  authorId   String
+  rating     Int
+  title      String?
+  body       String?
+  createdAt  DateTime @default(now())
+  isVisible  Boolean  @default(true)
+
+  seller SellerProfile @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  author User          @relation("UserReviews", fields: [authorId], references: [id], onDelete: Cascade)
+}
+
+model Favorite {
+  id        String        @id @default(cuid())
+  userId    String
+  sellerId  String
+  createdAt DateTime      @default(now())
+
+  user   User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  seller SellerProfile @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, sellerId])
+}
+
+model SellerStatsDaily {
+  id            String   @id @default(cuid())
+  sellerId      String
+  date          DateTime
+  views         Int      @default(0)
+  productViews  Int      @default(0)
+  ordersCount   Int      @default(0)
+  grossCents    Int      @default(0)
+
+  seller SellerProfile @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@unique([sellerId, date])
+}
+
+model Plan {
+  id               Int       @id @default(autoincrement())
+  name             PlanName  @unique
+  priceCents       Int       @default(0)
+  productLimit     Int?
+  boostVisibility  Boolean   @default(false)
+  features         Json?
+
+  subscriptions Subscription[]
+}
+
+model Subscription {
+  id                   String             @id @default(cuid())
+  sellerId             String             @unique
+  planId               Int
+  status               SubscriptionStatus @default(ACTIVE)
+  stripeSubscriptionId String?
+  currentPeriodEnd     DateTime?
+  createdAt            DateTime           @default(now())
+
+  seller SellerProfile @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  plan   Plan          @relation(fields: [planId], references: [id])
+}
+
+model PayoutAccount {
+  id               String  @id @default(cuid())
+  sellerId         String  @unique
+  stripeAccountId  String  @unique
+  chargesEnabled   Boolean @default(false)
+  payoutsEnabled   Boolean @default(false)
+  detailsSubmitted Boolean @default(false)
+
+  seller SellerProfile @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+}
+
+model WebhookEvent {
+  id        String   @id @default(cuid())
+  provider  String
+  eventId   String   @unique
+  type      String
+  receivedAt DateTime @default(now())
+  payload   Json
+}
